@@ -7,10 +7,11 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
-torch = "^2.1.1"
 scipy = "^1.11.3"
 numpy = "^1.26.2"
 matplotlib = "^3.8.1"
+cupy-cuda11x = "^12.2.0"
+torch = "1.13.1"
 
 
 [tool.poetry.group.dev.dependencies]
