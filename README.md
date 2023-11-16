@@ -1,1 +1,3 @@
-# NextToken
+# GPT
+
+A GPT from scratch
