@@ -3,6 +3,8 @@ import abc
 import torch
 from torch import nn
 
+from gpt.layers import FlattenConsecutive, Permute
+
 
 class NextToken(nn.Module):
     @abc.abstractmethod
@@ -51,30 +53,6 @@ class BiGram(NextToken):
         return logits, loss
 
 
-class Permute(nn.Module):
-    def __init__(self, dims):
-        super().__init__()
-        self.dims = dims
-        # self._parameters = None
-
-    def forward(self, x):
-        return torch.permute(x, self.dims)
-
-
-class FlattenConsecutive(nn.Module):
-    def __init__(self, n):
-        super().__init__()
-        self.n = n
-
-    def __call__(self, x):
-        B, T, C = x.shape
-        x = x.contiguous().view(B, T // self.n, C * self.n)
-        if x.shape[1] == 1:
-            x = x.squeeze(1)
-        self.out = x
-        return self.out
-
-
 class WaveNet(NextToken):
     """Doesn't work"""
 
@@ -117,33 +95,26 @@ class WaveNet(NextToken):
 
 
 class MLP(NextToken):
-    def __init__(self, vocab_size, block_size, n_embd, n_hidden):
+    def __init__(self, vocab_size, block_size, n_embd, n_hidden, act=nn.Tanh):
         super().__init__()
         self.vocab_size = vocab_size
         H = n_hidden
-        act = nn.Tanh
         self.layers = nn.Sequential(
             nn.Embedding(vocab_size, n_embd),
             nn.Flatten(),
             # layer 1
             nn.Linear(n_embd * block_size, H),
-            # Permute((0, 2, 1)),  # B, T, C -> B, C, T
             nn.BatchNorm1d(H),  # so weird that this is B, C, T!!!
-            # Permute((0, 2, 1)),  # B, C, T -> B, T, C
             act(),
 
             # layer 2
             nn.Linear(H, H),
-            # Permute((0, 2, 1)),  # B, T, C -> B, C, T
             nn.BatchNorm1d(H),  # so weird that this is B, C, T!!!
-            # Permute((0, 2, 1)),  # B, C, T -> B, T, C
             act(),
 
             # layer 3
             nn.Linear(H, H),
-            # Permute((0, 2, 1)),  # B, T, C -> B, C, T
             nn.BatchNorm1d(H),  # so weird that this is B, C, T!!!
-            # Permute((0, 2, 1)),  # B, C, T -> B, T, C
             act(),
             nn.Linear(H, vocab_size),
         )
@@ -156,9 +127,6 @@ class MLP(NextToken):
         if targets is None:
             loss = None
         else:
-            # B, T, C = logits.shape
-            # logits2 = logits.view(B * T, C)
-            # targets2 = targets.view(B * T)
             loss = nn.functional.cross_entropy(logits, targets[:, -1])
 
         return logits, loss

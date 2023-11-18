@@ -44,4 +44,5 @@ class TextDataset(Dataset):
         return len(self.data) - self.block_size - 1
 
     def __getitem__(self, idx: int):
+        assert idx < len(self)
         return self.data_i[idx:idx + self.block_size], self.data_i[idx + 1:idx + self.block_size + 1]
