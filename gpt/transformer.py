@@ -12,9 +12,9 @@ class Transformer(NextToken):
         vocab_size: int
         block_size: int
         n_embd: int
-        # n_hidden: int
         n_heads: int
         n_blocks: int
+        dropout: float
 
     def __init__(self, c: Config):
         super().__init__()
@@ -23,9 +23,10 @@ class Transformer(NextToken):
         self.token_embedding_table = nn.Embedding(c.vocab_size, c.n_embd)
         self.position_embedding_table = nn.Embedding(c.block_size, c.n_embd)
         self.blocks = nn.Sequential(
-            *(TransformerBlock(c.n_heads, c.n_embd, in_channels=c.n_embd if i == 0 else c.n_embd)
-              for i in range(c.n_blocks)
-              ))
+            *[TransformerBlock(n_heads=c.n_heads, n_embd=c.n_embd, in_channels=c.n_embd, dropout=c.dropout)
+              for i in range(c.n_blocks)]
+        )
+        self.ln_final = nn.LayerNorm(c.n_embd)
         self.project = nn.Linear(c.n_embd, c.vocab_size)
 
         self.register_buffer('positions', torch.arange(c.block_size))
@@ -47,7 +48,7 @@ class Transformer(NextToken):
         assert not x.isnan().any()
 
         x = self.blocks(x)  # B,T,H
-
+        x = self.ln_final(x)  # B,T,H
         x = self.project(x)  # B,T,V
         assert x.shape == (B, T, V)
 
@@ -64,7 +65,7 @@ class Transformer(NextToken):
 
 
 class AttentionHead(nn.Module):
-    def __init__(self, n_channels, head_size):
+    def __init__(self, n_channels, head_size, dropout):
         super().__init__()
         C, H = n_channels, head_size
 
@@ -76,6 +77,8 @@ class AttentionHead(nn.Module):
 
         self.register_buffer('scale', torch.tensor(H ** -0.5))
 
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         T = x.shape[1]  # time dim
         mask = ~torch.tril(torch.ones(T, T).to(torch.bool)).to(x.device)  # causal mask
@@ -86,44 +89,50 @@ class AttentionHead(nn.Module):
         w = torch.masked_fill(w, mask, value=float('-inf'))
         w = w * self.scale  # causal mask, normalize
         w = torch.softmax(w, dim=-1)
+        w = self.dropout(w)
         assert w.isnan().sum() == 0
         x = w @ v  # B,T,T @ B,T,C = B,T,C
         return x
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, n_heads, head_size, in_channels):
+    def __init__(self, n_heads, n_embd, in_channels, dropout):
         super().__init__()
         self.n_heads = n_heads
-        self.head_size = head_size
+        self.n_embd = n_embd
         self.in_channels = in_channels
-        self.heads = nn.ModuleList([AttentionHead(n_channels=in_channels, head_size=head_size) for _ in range(n_heads)])
+        self.heads = nn.ModuleList(
+            [AttentionHead(n_channels=in_channels, head_size=n_embd // n_heads, dropout=dropout) for _ in range(n_heads)])
+        self.project = nn.Linear(n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        x = torch.cat([head(x) for head in self.heads], dim=-1)
-        return x
+        o = torch.cat([head(x) for head in self.heads], dim=-1)
+        o = self.dropout(self.project(o))
+        return o
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, n_heads, head_size, in_channels):
+    def __init__(self, n_heads, n_embd, in_channels, dropout):
         super().__init__()
         self.ln1 = nn.LayerNorm(in_channels)
-        self.mha = MultiHeadAttention(n_heads, head_size // n_heads, in_channels=in_channels)
-        self.ln2 = nn.LayerNorm(head_size)
-        self.ff = FeedForward(head_size)
+        self.mha = MultiHeadAttention(n_heads=n_heads, n_embd=n_embd, in_channels=in_channels, dropout=dropout)
+        self.ln2 = nn.LayerNorm(n_embd)
+        self.ff = FeedForward(n_embd, dropout)
 
     def forward(self, x):
-        x = x+ self.mha(self.ln1(x))
-        x = x+ self.ff(self.ln2(x))
+        x = x + self.mha(self.ln1(x))
+        x = x + self.ff(self.ln2(x))
         return x
 
 
 class FeedForward(nn.Module):
-    def __init__(self, n_features):
+    def __init__(self, n_features, dropout):
         super().__init__()
         self.layers = nn.Sequential(nn.Linear(n_features, n_features * 4),
                                     nn.ReLU(),
-                                    nn.Linear(n_features * 4, n_features))
+                                    nn.Linear(n_features * 4, n_features),
+                                    nn.Dropout(dropout))
 
     def forward(self, x):
         return self.layers(x)
