@@ -5,6 +5,7 @@ from torch import nn
 
 
 class NextToken(nn.Module):
+
     @abc.abstractmethod
     def forward(self, idx, targets=None) -> (torch.Tensor, torch.Tensor):
         pass
