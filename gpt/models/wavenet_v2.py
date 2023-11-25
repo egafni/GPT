@@ -1,62 +1,44 @@
-import torch
-import torch.nn as nn
+from torch import nn
+
+from gpt.models.model import NextToken
 
 
-class WaveBlock(nn.Module):
+class WaveNet(NextToken):
+    """Doesn't work"""
 
-    def __init__(self, in_channels, out_channels, dilation_rates, kernel_size):
-        super(WaveBlock, self).__init__()
-        self.num_rates = dilation_rates
-        self.convs = nn.ModuleList()
-        self.filter_convs = nn.ModuleList()
-        self.gate_convs = nn.ModuleList()
-
-        self.convs.append(nn.Conv1d(in_channels, out_channels, kernel_size=1))
-        dilation_rates = [2 ** i for i in range(dilation_rates)]
-        for dilation_rate in dilation_rates:
-            self.filter_convs.append(
-                nn.Conv1d(out_channels,
-                          out_channels,
-                          kernel_size=kernel_size,
-                          padding=int((dilation_rate * (kernel_size - 1)) / 2),
-                          dilation=dilation_rate))
-            self.gate_convs.append(
-                nn.Conv1d(out_channels,
-                          out_channels,
-                          kernel_size=kernel_size,
-                          padding=int((dilation_rate * (kernel_size - 1)) / 2),
-                          dilation=dilation_rate))
-            self.convs.append(nn.Conv1d(out_channels, out_channels, kernel_size=1))
-
-    def forward(self, x):
-        x = self.convs[0](x)
-        res = x
-        for i in range(self.num_rates):
-            x = torch.tanh(self.filter_convs[i](x)) * torch.sigmoid(self.gate_convs[i](x))
-            x = self.convs[i + 1](x)
-            res = res + x
-        return res
-
-
-class Classifier(nn.Module):
-    def __init__(self, inch=8, kernel_size=3):
+    def __init__(self, vocab_size, n_embd, n_hidden):
         super().__init__()
-        # self.LSTM = nn.GRU(input_size=input_size, hidden_size=64, num_layers=2, batch_first=True, bidirectional=True)
-        self.wave_block1 = WaveBlock(inch, 16, 12, kernel_size)
-        self.wave_block2 = WaveBlock(16, 32, 8, kernel_size)
-        self.wave_block3 = WaveBlock(32, 64, 4, kernel_size)
-        self.wave_block4 = WaveBlock(64, 128, 1, kernel_size)
-        self.fc = nn.Linear(128, 11)
+        self.vocab_size = vocab_size
+        H = n_hidden
+        act = nn.Tanh
+        self.layers = nn.Sequential(
+            nn.Embedding(vocab_size, n_embd),
+            # layer 1
+            FlattenConsecutive(2),
+            nn.Linear(n_embd * 2, H),
+            Permute((0, 2, 1)),  # B, T, C -> B, C, T
+            nn.BatchNorm1d(H),  # so weird that this is B, C, T!!!
+            Permute((0, 2, 1)),  # B, C, T -> B, T, C
+            act(),
 
-    def forward(self, x):
-        x = x.permute(0, 2, 1)
+            # layer 2
+            FlattenConsecutive(2),
+            nn.Linear(H * 2, H),
+            Permute((0, 2, 1)),  # B, T, C -> B, C, T
+            nn.BatchNorm1d(H),  # so weird that this is B, C, T!!!
+            Permute((0, 2, 1)),  # B, C, T -> B, T, C
+            act(),
 
-        x = self.wave_block1(x)
-        x = self.wave_block2(x)
-        x = self.wave_block3(x)
+            # layer 3
+            FlattenConsecutive(2),
+            nn.Linear(H * 2, H),
+            Permute((0, 2, 1)),  # B, T, C -> B, C, T
+            nn.BatchNorm1d(H),  # so weird that this is B, C, T!!!
+            Permute((0, 2, 1)),  # B, C, T -> B, T, C
+            act(),
+            nn.Linear(H, vocab_size),
+        )
 
-        x = self.wave_block4(x)
-        x = x.permute(0, 2, 1)
-        # x, _ = self.LSTM(x)
-        x = self.fc(x)
-        return x
+    def forward(self, x, targets=None):
+        logits = self.layers(x)  # (B,T,C)
+        return logits

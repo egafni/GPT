@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from gpt.model import NextToken
+from gpt.models.next_token import NextToken
 
 
 class Transformer(NextToken):
